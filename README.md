@@ -77,7 +77,7 @@ Em poucos minutos o agente deve aparecer online no Azure DevOps (Project Setting
 
 #### Criar token no SonarQube
 
-Abra o navegador e acesse o SonarQube em http://localhost:9090.
+Abra o navegador e acesse o SonarQube em http://localhost:9000.
 
 Faça o login com usuário/senha admin/admin e troque a senha deste usuário, conforme solicitado.
 
