@@ -1,0 +1,29 @@
+version: '3.7'
+
+services:
+  sonarqube:
+    image: sonarqube:10.6-community
+    container_name: sonarqube
+    ports:
+      - "9000:9000"
+    environment:
+      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+    networks:
+      - devopsnet
+
+  azure-agent:
+    build:
+      context: ./azp-agent-in-docker
+      dockerfile: Dockerfile
+    container_name: azpagent
+    environment:
+      - AZP_URL=https://dev.azure.com/<SUA-ORGANIZACAO-AZDO>
+      - AZP_TOKEN=<SEU-PAT-AZDO>
+      - AZP_AGENT_NAME=Docker Agent - Ubuntu
+      - AZP_POOL=Default
+    networks:
+      - devopsnet
+
+networks:
+  devopsnet:
+    driver: bridge

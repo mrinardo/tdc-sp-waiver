@@ -1,0 +1,204 @@
+pool:
+  name: Default
+
+trigger: none
+  
+variables:
+- group: "exemplo-waiver"
+
+steps:
+- task: Cache@2
+  displayName: '.m2 Cache'
+  inputs:
+    key: 'maven | "$(Agent.OS)" | **/pom.xml'
+    path: '$(Pipeline.Workspace)/.m2/repository'
+    restoreKeys: |
+     maven | "$(Agent.OS)"
+     maven
+
+- bash: './mvnw package -Dmaven.repo.local=$(Pipeline.Workspace)/.m2/repository'
+  displayName: 'Build & Test'
+
+- task: SonarSource.sonarqube.15B84CA1-B62F-4A2A-A403-89B77A063157.SonarQubePrepare@6
+  displayName: 'Prepare analysis on SonarQube'
+  inputs:
+    SonarQube: Sonar
+    scannerMode: CLI
+    configMode: manual
+    cliProjectKey: '$(System.TeamProject)-$(Build.Repository.Name)'
+    cliProjectName: '$(System.TeamProject)-$(Build.Repository.Name)'
+    cliProjectVersion: '3.3.0-SNAPSHOT'
+    cliSources: src/main/java
+    extraProperties: |
+     sonar.language=java
+     sonar.sources=src/main/java
+     sonar.tests=src/test
+     sonar.java.binaries=target/classes
+     sonar.java.test.binaries=target/test-classes
+     sonar.junit.reportPaths=target/surefire-reports
+     sonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+     sonar.java.coveragePlugin=jacoco
+     sonar.scanner.metadataFilePath=$(Agent.TempDirectory)/sonar/$(Build.BuildId)/report-task.txt
+     sonar.log.level=DEBUG
+
+- task: SonarSource.sonarqube.6D01813A-9589-4B15-8491-8164AEB38055.SonarQubeAnalyze@6
+  displayName: 'Run Code Analysis'
+  inputs:
+    jdkversion: 'JAVA_HOME'
+  continueOnError: true
+
+- task: SonarSource.sonarqube.291ed61f-1ee4-45d3-b1b0-bf822d9095ef.SonarQubePublish@6
+  displayName: 'Publish Quality Gate Result'
+  continueOnError: true
+
+- bash: |
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    BLUE='\033[0;34m'
+    NC='\033[0m'
+    BOLD='\033[1m'
+
+    # Configurações para OPA
+    OPA_POLICY_FILE="./.azuredevops/opa/sonar-waiver-policy.rego"
+    OPA_DATA_FILE="./.azuredevops/opa/sonar-waiver-data.json"
+
+    SONAR_REPORT="$(Agent.TempDirectory)/sonar/$(Build.BuildId)/report-task.txt"
+
+    # Extrair valores do arquivo de relatório do Sonar
+    extract_value() {
+        grep "^$1=" "$SONAR_REPORT" | cut -d'=' -f2-
+    }
+
+    # Extração das informações do relatório do Sonar
+    SONAR_PROJECT_KEY=$(extract_value 'projectKey')
+    SONAR_TASK_ID=$(extract_value 'ceTaskId')
+    SONAR_TASK_URL=$(extract_value 'ceTaskUrl')
+    SONAR_PROJECT_DASHBOARD=$(extract_value 'dashboardUrl')
+    SONAR_URL=$(extract_value 'serverUrl')
+
+    # Dados da análise do Sonar
+    SONAR_ANALYSIS_ID="$(curl -s --header 'Authorization: Bearer $(SONARQUBE_TOKEN)' ${SONAR_TASK_URL} | jq -r '.task.analysisId')"
+    SONAR_PROJECT_STATUS_URL="${SONAR_URL}/api/qualitygates/project_status?analysisId=${SONAR_ANALYSIS_ID}"
+    SONAR_ANALYSIS_STATUS="$(curl -s --header 'Authorization: Bearer $(SONARQUBE_TOKEN)'  ${SONAR_PROJECT_STATUS_URL} | jq -r '.projectStatus.status')"
+
+    # Obter detalhes da análise no Sonar para arquivo temporário
+    curl -s --header 'Authorization: Bearer $(SONARQUBE_TOKEN)' ${SONAR_PROJECT_STATUS_URL} | jq -r > ./.tmp.sonar.json
+
+    echo "##[debug] SONAR_PROJECT_KEY...........: ${SONAR_PROJECT_KEY}"
+    echo "##[debug] SONAR_TASK_ID...............: ${SONAR_TASK_ID}"
+    echo "##[debug] SONAR_TASK_URL..............: ${SONAR_TASK_URL}"
+    echo "##[debug] SONAR_ANALYSIS_ID...........: ${SONAR_ANALYSIS_ID}"
+    echo "##[debug] SONAR_PROJECT_STATUS_URL....: ${SONAR_PROJECT_STATUS_URL}"
+    echo "##[debug] SONAR_ANALYSIS_STATUS.......: ${SONAR_ANALYSIS_STATUS}"
+    echo "##[debug] SONAR_PROJECT_DASHBOARD.....: ${SONAR_PROJECT_DASHBOARD}"
+
+    if [[ ${SONAR_ANALYSIS_STATUS} == "" ]]; then
+      echo "##[error]Não foi possivel obter resultado da análise do Sonar. Verifique o token de autenticação com o Sonar."
+      echo "##vso[task.complete result=Failed;]"
+    fi
+
+    # Mapeamento de métricas
+    declare -A metric_map=(
+        ["new_reliability_rating"]="New Reliability Rating"
+        ["new_security_rating"]="New Security Rating"
+        ["new_maintainability_rating"]="New Maintainability Rating"
+        ["coverage"]="Coverage"
+        ["new_coverage"]="New Coverage"
+        ["lines"]="Lines of Code"
+        ["ncloc"]="Non-Commenting Lines of Code"
+        ["duplicated_lines_density"]="Duplicated Lines Density"
+        ["new_duplicated_lines_density"]="New Duplicated Lines Density"
+        ["code_smells"]="Code Smells"
+        ["new_code_smells"]="New Code Smells"
+        ["bugs"]="Bugs"
+        ["new_bugs"]="New Bugs"
+        ["vulnerabilities"]="Vulnerabilities"
+        ["new_vulnerabilities"]="New Vulnerabilities"
+        ["sqale_rating"]="Maintainability Rating"
+        ["new_technical_debt"]="New Technical Debt"
+        ["comment_lines_density"]="Comment Lines Density"
+        ["complexity"]="Complexity"
+        ["file_complexity"]="File Complexity"
+        ["class_complexity"]="Class Complexity"
+        ["function_complexity"]="Function Complexity"
+        ["cognitive_complexity"]="Cognitive Complexity"
+        ["violations"]="Violations"
+        ["new_violations"]="New Violations"
+    )
+
+    # Imprimir mensagens formatadas
+    print_message() {
+        local metric_key=$1
+        local status=$2
+        local display_key=${metric_map[$metric_key]}
+
+        if [ "$status" == "ERROR" ]; then
+          echo -e "${RED}${BOLD}$display_key: ${RED}$status${NC}"
+        else
+          echo -e "${GREEN}${BOLD}$display_key: ${GREEN}$status${NC}"
+        fi
+    }
+
+    # Resultados da análise do Sonar
+    printf "
+    ${BLUE}===========================================================================
+    ${BLUE}                        ANÁLISE DO SONARQUBE
+    ${BLUE}===========================================================================
+    "
+
+    jq -c '.projectStatus.conditions[]' ./.tmp.sonar.json | while read condition; do
+        metric_key=$(echo $condition | jq -r '.metricKey')
+        status=$(echo $condition | jq -r '.status')
+        print_message $metric_key $status
+    done
+
+    printf "\n${BLUE}${BOLD}ANALYSIS STATUS: "
+    [ ${SONAR_ANALYSIS_STATUS} == "ERROR" ] && printf "${RED}${SONAR_ANALYSIS_STATUS}\n" || printf "${GREEN}${SONAR_ANALYSIS_STATUS}\n"
+    printf "
+    ${BLUE}Veja a análise completa: $SONAR_PROJECT_DASHBOARD
+    ${BLUE}===========================================================================
+    "
+
+    rm -rf ./.tmp.sonar.json
+
+    # Avaliação da política de waiver com OPA
+    if [[ "${SONAR_ANALYSIS_STATUS}" == "ERROR" ]]; then
+        WAIVER_EVAL_RESULT=$(opa eval --format=raw --data "${OPA_POLICY_FILE}" --data "${OPA_DATA_FILE}" --input <(echo "{\"project\": \"$SONAR_PROJECT_KEY\"}") "data.waiver")
+
+        #echo "##[debug] WAIVER_EVAL_RESULT..........: ${WAIVER_EVAL_RESULT}"
+
+        WAIVER_DATA_DUE_DATE=$(jq -r ".waiver_projects | .\"$SONAR_PROJECT_KEY\" | .due_date" ${OPA_DATA_FILE})
+        WAIVER_DATA_TICKET=$(jq -r ".waiver_projects | .\"$SONAR_PROJECT_KEY\" | .order_number" ${OPA_DATA_FILE})
+
+        ALLOW_WAIVER=$(echo $WAIVER_EVAL_RESULT | jq -r '.allow')
+        WAIVER_IS_SET=$(echo $WAIVER_EVAL_RESULT | jq -r '.waiver_is_set')
+        WAIVER_IS_EXPIRED=$(echo $WAIVER_EVAL_RESULT | jq -r '.waiver_is_expired')
+
+        printf "
+          ${BLUE}===========================================================================
+          ${BLUE}                           WAIVER POLICY
+          
+          ${BLUE}Saiba mais em: https://xyz.com.br/waiver-sonar
+          ${BLUE}===========================================================================
+          ${BLUE}WAIVER CONFIGURADO...........................: $WAIVER_IS_SET
+          ${BLUE}WAIVER EXPIRADO..............................: $WAIVER_IS_EXPIRED
+          ${BLUE}TICKET.......................................: $WAIVER_DATA_TICKET
+          ${BLUE}DATA EXPIRAÇÃO...............................: $WAIVER_DATA_DUE_DATE
+        "
+
+        if [ "${ALLOW_WAIVER}" != "true" ]; then
+
+          printf "
+          ${BLUE}STATUS: ${RED}WAIVER NÃO AUTORIZADO
+          ${BLUE}===========================================================================
+          "
+
+          echo "##vso[task.complete result=Failed;]"
+        else
+          printf "
+          ${BLUE}STATUS: ${GREEN}WAIVER AUTORIZADO
+          ${BLUE}===========================================================================
+          "
+        fi
+    fi
+  displayName: 'Quality Gate Evaluation'
