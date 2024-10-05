@@ -2,7 +2,7 @@
 
 Este repositório contém o exemplo utilizado na apresentação "Externalizando as políticas de qualidade do código com Open Policy Agent" realizada no TDC Sao Paulo 2024.
 
-O exemplo consiste de um pipeline do Azure DevOps que faz o build & test da aplicação [Spring PetClinic](https://github.com/spring-projects/spring-petclinic), executa o análise estática do código com o [SonarQube](https://www.sonarsource.com/products/sonarqube/) e, se o código analisado falhar em atingir os quality gates definidos, o Open Policy Agent (OPA) é utiizado pelo pipeine para decidir se o projeto pode ou não continuar pelo pipeline mesmo sem ter atingido os quality gates.
+O exemplo consiste de um pipeline do Azure DevOps que faz o build & test da aplicação [Spring PetClinic](https://github.com/spring-projects/spring-petclinic), executa a análise estática do código com o [SonarQube](https://www.sonarsource.com/products/sonarqube/) e, se o código analisado falhar em atingir os quality gates definidos, o Open Policy Agent (OPA) é utiizado pelo pipeine para decidir se o projeto pode ou não continuar pelo pipeline mesmo sem ter atingido os quality gates.
 
 Denominamos o processo de passar pelo pipeline sem atingir os quality gates de ["Waiver"](https://en.wikipedia.org/wiki/Waiver) e ele é aplicado por uma política externa ao pipeline escrita com a linguagem REGO do OPA.
 
